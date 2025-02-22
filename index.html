@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>3D Endless Runner</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #score {
+            position: fixed;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 24px;
+            z-index: 100;
+        }
+        #gameOver {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: white;
+            font-size: 48px;
+            display: none;
+            text-align: center;
+            z-index: 100;
+        }
+        #restartButton {
+            padding: 10px 20px;
+            font-size: 24px;
+            margin-top: 20px;
+            cursor: pointer;
+            background: #4CAF50;
+            border: none;
+            color: white;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="score">Score: 0</div>
+    <div id="gameOver">
+        Game Over!
+        <br>
+        <button id="restartButton">Restart</button>
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, player, obstacles = [], coins = [], score = 0;
+        let gameStarted = false;
+        let isGameOver = false;
+        let playerVelocity = 0;
+        const gravity = 0.01;
+        const jumpForce = 0.3;
+        let isJumping = false;
+        const radius = 0.5; // Player ball radius
+
+        function init() {
+            // Scene setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb); // Sky blue background
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true; // Enable shadows
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap; // Soft shadows
+            document.body.appendChild(renderer.domElement);
+
+            // Lighting
+            const light = new THREE.DirectionalLight(0xffffff, 1);
+            light.position.set(0, 10, 10);
+            light.castShadow = true;
+            light.shadow.camera.left = -10;
+            light.shadow.camera.right = 10;
+            light.shadow.camera.top = 10;
+            light.shadow.camera.bottom = -10;
+            light.shadow.camera.near = 0.1;
+            light.shadow.camera.far = 100;
+            scene.add(light);
+            scene.add(new THREE.AmbientLight(0x404040));
+
+            // Ground
+            const groundGeometry = new THREE.BoxGeometry(10, 0.5, 1000);
+            const groundMaterial = new THREE.MeshPhongMaterial({ color: 0x888888 });
+            const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+            ground.position.y = -2;
+            ground.position.z = -400;
+            ground.receiveShadow = true; // Ground receives shadows
+            scene.add(ground);
+
+            // Player
+            const playerGeometry = new THREE.SphereGeometry(radius, 32, 32);
+            const playerMaterial = new THREE.MeshPhongMaterial({ color: 0x0000ff });
+            player = new THREE.Mesh(playerGeometry, playerMaterial);
+            player.position.set(0, radius, -5);
+            player.castShadow = true; // Player casts shadows
+            scene.add(player);
+
+            camera.position.y = 2;
+            camera.position.z = 5;
+
+            // Event listeners
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('touchstart', onTouchStart);
+            window.addEventListener('resize', onWindowResize);
+            document.getElementById('restartButton').addEventListener('click', restartGame);
+
+            generateInitialObstacles();
+            animate();
+        }
+
+        function generateInitialObstacles() {
+            for (let i = 0; i < 10; i++) {
+                const zPosition = -50 - i * 20;
+                createObstacle(zPosition);
+                if (Math.random() < 0.5) {
+                    createCoin(zPosition);
+                }
+            }
+        }
+
+        function createObstacle(zPosition) {
+            const height = Math.random() * 2 + 1;
+            const geometry = new THREE.CylinderGeometry(0.5, 0.5, height, 32);
+            const material = new THREE.MeshPhongMaterial({ color: 0xff0000 });
+            const obstacle = new THREE.Mesh(geometry, material);
+            obstacle.position.x = (Math.random() - 0.5) * 6;
+            obstacle.position.y = height / 2 - 1;
+            obstacle.position.z = zPosition;
+            obstacle.passed = false;
+            obstacle.castShadow = true; // Obstacles cast shadows
+            scene.add(obstacle);
+            obstacles.push(obstacle);
+        }
+
+        function createCoin(zPosition) {
+            const geometry = new THREE.CylinderGeometry(0.5, 0.5, 0.1, 32);
+            const material = new THREE.MeshPhongMaterial({ color: 0xffff00 });
+            const coin = new THREE.Mesh(geometry, material);
+            coin.position.x = (Math.random() - 0.5) * 6;
+            coin.position.y = Math.random() < 0.5 ? 0.5 : 1.5; // On ground or floating
+            coin.position.z = zPosition;
+            coin.rotation.x = Math.PI / 2; // Stand upright
+            coin.castShadow = true; // Coins cast shadows
+            scene.add(coin);
+            coins.push(coin);
+        }
+
+        function updateObstacles(speed) {
+            for (let i = obstacles.length - 1; i >= 0; i--) {
+                obstacles[i].position.z += speed;
+
+                if (!obstacles[i].passed && obstacles[i].position.z > player.position.z) {
+                    score++;
+                    obstacles[i].passed = true;
+                }
+
+                if (obstacles[i].position.z > 10) {
+                    scene.remove(obstacles[i]);
+                    obstacles[i].geometry.dispose();
+                    obstacles[i].material.dispose();
+                    obstacles.splice(i, 1);
+                    createObstacle(-100);
+                    if (Math.random() < 0.5) {
+                        createCoin(-100);
+                    }
+                }
+
+                // Collision detection
+                if (!isGameOver && obstacles[i].position.z > -6 && obstacles[i].position.z < -4) {
+                    const playerBox = new THREE.Box3().setFromObject(player);
+                    const obstacleBox = new THREE.Box3().setFromObject(obstacles[i]);
+                    if (playerBox.intersectsBox(obstacleBox)) {
+                        gameOver();
+                    }
+                }
+            }
+        }
+
+        function updateCoins(speed) {
+            for (let i = coins.length - 1; i >= 0; i--) {
+                coins[i].position.z += speed;
+                coins[i].rotation.y += 0.05; // Rotate coin for visual effect
+
+                if (coins[i].position.z > 10) {
+                    scene.remove(coins[i]);
+                    coins[i].geometry.dispose();
+                    coins[i].material.dispose();
+                    coins.splice(i, 1);
+                    // Coins are recreated when obstacles are repositioned
+                }
+
+                // Collection detection
+                if (!isGameOver && coins[i].position.z > -6 && coins[i].position.z < -4) {
+                    const playerBox = new THREE.Box3().setFromObject(player);
+                    const coinBox = new THREE.Box3().setFromObject(coins[i]);
+                    if (playerBox.intersectsBox(coinBox)) {
+                        score += 1;
+                        scene.remove(coins[i]);
+                        coins[i].geometry.dispose();
+                        coins[i].material.dispose();
+                        coins.splice(i, 1);
+                    }
+                }
+            }
+        }
+
+        function updatePlayer(speed) {
+            if (!isJumping) {
+                player.rotation.x += speed / radius; // Roll the ball
+            }
+
+            if (isJumping) {
+                player.position.y += playerVelocity;
+                playerVelocity -= gravity;
+                if (player.position.y <= radius) {
+                    player.position.y = radius;
+                    isJumping = false;
+                    playerVelocity = 0;
+                }
+            }
+
+            // Player movement controls
+            const moveSpeed = 0.1;
+            if (keys.ArrowLeft && player.position.x > -4) {
+                player.position.x -= moveSpeed;
+            }
+            if (keys.ArrowRight && player.position.x < 4) {
+                player.position.x += moveSpeed;
+            }
+        }
+
+        function onKeyDown(event) {
+            if (event.code === 'Space' && !isJumping && !isGameOver) {
+                jump();
+                if (!gameStarted) {
+                    gameStarted = true;
+                }
+            }
+        }
+
+        function onTouchStart() {
+            if (!isJumping && !isGameOver) {
+                jump();
+                if (!gameStarted) {
+                    gameStarted = true;
+                }
+            }
+        }
+
+        function jump() {
+            isJumping = true;
+            playerVelocity = jumpForce;
+        }
+
+        function gameOver() {
+            isGameOver = true;
+            document.getElementById('gameOver').style.display = 'block';
+        }
+
+        function restartGame() {
+            isGameOver = false;
+            gameStarted = false;
+            score = 0;
+            document.getElementById('score').textContent = 'Score: 0';
+            document.getElementById('gameOver').style.display = 'none';
+
+            // Reset player position and rotation
+            player.position.set(0, radius, -5);
+            player.rotation.x = 0;
+            playerVelocity = 0;
+            isJumping = false;
+
+            // Clear obstacles and coins
+            obstacles.forEach(obstacle => {
+                scene.remove(obstacle);
+                obstacle.geometry.dispose();
+                obstacle.material.dispose();
+            });
+            coins.forEach(coin => {
+                scene.remove(coin);
+                coin.geometry.dispose();
+                coin.material.dispose();
+            });
+            obstacles = [];
+            coins = [];
+
+            generateInitialObstacles();
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // Keyboard controls
+        const keys = {};
+        document.addEventListener('keydown', (e) => keys[e.code] = true);
+        document.addEventListener('keyup', (e) => keys[e.code] = false);
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (gameStarted && !isGameOver) {
+                const speed = 0.2 + 0.05 * Math.floor(score / 10);
+                updateObstacles(speed);
+                updatePlayer(speed);
+                updateCoins(speed);
+                document.getElementById('score').textContent = `Score: ${score}`;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+    </script>
+</body>
+</html>
